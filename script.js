@@ -1,14 +1,9 @@
-// Security Config 2026
 const ITERATIONS = 600000; 
 const SALT_SIZE = 16;      
 const IV_SIZE = 12;        
 
-const status = document.getElementById('status');
+const log = (msg) => document.getElementById('status').innerText = msg;
 
-// Helper to update UI status
-const log = (msg) => status.innerText = msg;
-
-// Generate a key from password using PBKDF2
 async function deriveKey(password, salt) {
     const encoder = new TextEncoder();
     const baseKey = await window.crypto.subtle.importKey(
@@ -23,59 +18,40 @@ async function deriveKey(password, salt) {
     );
 }
 
-// Encrypt File
 document.getElementById('btn-encrypt').onclick = async () => {
-    const file = document.getElementById('file-input').files[0];
+    const files = document.getElementById('file-input').files;
     const password = document.getElementById('password').value;
-    if (!file || !password) return log("Error: Select a file and enter a password.");
+    if (files.length === 0 || !password) return log("Error: Select files and enter a password.");
 
-    log("Encrypting...");
+    log("Encrypting and Zipping...");
+    const zip = new JSZip();
     const salt = window.crypto.getRandomValues(new Uint8Array(SALT_SIZE));
-    const iv = window.crypto.getRandomValues(new Uint8Array(IV_SIZE));
-    const key = await deriveKey(password, salt);
-    
-    const content = await file.arrayBuffer();
-    const encryptedContent = await window.crypto.subtle.encrypt(
-        { name: "AES-GCM", iv }, key, content
-    );
 
-    // Bundle: [SALT] + [IV] + [ENCRYPTED DATA]
-    const blob = new Blob([salt, iv, new Uint8Array(encryptedContent)], { type: "application/octet-stream" });
-    download(blob, file.name + ".enc");
-    log("Encryption Complete.");
-};
-
-// Decrypt File
-document.getElementById('btn-decrypt').onclick = async () => {
-    const file = document.getElementById('file-input').files[0];
-    const password = document.getElementById('password').value;
-    if (!file || !password) return log("Error: Select an .enc file and enter the password.");
-
-    log("Decrypting...");
-    const data = new Uint8Array(await file.arrayBuffer());
-    const salt = data.slice(0, SALT_SIZE);
-    const iv = data.slice(SALT_SIZE, SALT_SIZE + IV_SIZE);
-    const encryptedData = data.slice(SALT_SIZE + IV_SIZE);
-
-    try {
+    for (const file of files) {
+        const iv = window.crypto.getRandomValues(new Uint8Array(IV_SIZE));
         const key = await deriveKey(password, salt);
-        const decryptedContent = await window.crypto.subtle.decrypt(
-            { name: "AES-GCM", iv }, key, encryptedData
-        );
+        const content = await file.arrayBuffer();
         
-        const blob = new Blob([decryptedContent], { type: "application/octet-stream" });
-        download(blob, file.name.replace(".enc", ""));
-        log("Decryption Successful.");
-    } catch (e) {
-        log("Error: Decryption failed (Wrong password or corrupted file).");
-    }
-};
+        const encryptedContent = await window.crypto.subtle.encrypt(
+            { name: "AES-GCM", iv }, key, content
+        );
 
-function download(blob, filename) {
-    const url = URL.createObjectURL(blob);
+        // Combine IV and Ciphertext for each file
+        const combined = new Uint8Array(iv.length + encryptedContent.byteLength);
+        combined.set(iv);
+        combined.set(new Uint8Array(encryptedContent), iv.length);
+        
+        zip.file(file.name + ".enc", combined);
+    }
+
+    // Add the salt to the zip so we can derive the key later
+    zip.file("metadata.salt", salt);
+
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(zipBlob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename;
+    a.download = "EncryptedVault.zip";
     a.click();
-    URL.revokeObjectURL(url);
-}
+    log("Vault Created Successfully.");
+};
